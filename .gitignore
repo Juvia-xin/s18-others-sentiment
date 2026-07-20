@@ -1,0 +1,7 @@
+node_modules/
+**/sentiment.db
+**/browser-profile/
+**/snapshots/
+.env
+*.log
+.DS_Store
