@@ -95,8 +95,12 @@ async function runDailyAnalysis(dateStr) {
         })).filter(c => c.post_id);
 
         if (batch.length > 0) {
-          Comment.createBatch(batch);
-          console.log(`  [${platform}] ${batch.length} 条评论入库`);
+          try {
+            Comment.createBatch(batch);
+            console.log(`  [${platform}] ${batch.length} 条评论入库`);
+          } catch (e) {
+            console.error(`  [${platform}] 评论入库失败: ${e.message}，跳过`);
+          }
         }
       }
 

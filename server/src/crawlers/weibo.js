@@ -33,6 +33,7 @@ class WeiboBrowserCrawler extends BrowserCrawler {
               if (item.card_type && item.card_type !== 9) continue;
 
               results.push({
+                platform: 'weibo',
                 post_id: mblog.id || mblog.mid,
                 title: ((mblog.text_raw || mblog.text || '').replace(/<[^>]+>/g, '')).slice(0, 80),
                 content: (mblog.text_raw || mblog.text || '').replace(/<[^>]+>/g, ''),
