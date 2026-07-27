@@ -61,3 +61,13 @@ export async function fetchLatestDate() {
   const { data } = await api.get('/reports/latest-date');
   return data;
 }
+
+export async function fetchWeeklyReports() {
+  const { data } = await api.get('/reports/weekly');
+  return data;
+}
+
+export async function fetchWeeklyRanking() {
+  const { data } = await api.get('/reports/weekly-ranking');
+  return data;
+}

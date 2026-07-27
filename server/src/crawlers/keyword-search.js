@@ -12,7 +12,7 @@ class KeywordCrawler {
     }
   }
 
-  async searchBilibili(keyword, { startDate, endDate } = {}) {
+  async searchBilibili(keyword, { startDate, endDate, gameNames } = {}) {
     console.log(`[关键词·B站] 搜索: ${keyword}`);
     const results = [];
 
@@ -35,10 +35,15 @@ class KeywordCrawler {
       );
 
       if (data?.code === 0 && data.data?.result) {
+        const checkNames = gameNames || [keyword];
         for (const r of (data.data.result || []).slice(0, 20)) {
           const pubTime = new Date(r.pubdate * 1000).toISOString();
           if (startDate && pubTime < startDate) continue;
           if (endDate && pubTime > endDate) continue;
+
+          const fullText = ((r.title || '') + (r.description || '')).toLowerCase();
+          const matched = checkNames.some(name => fullText.includes(name.toLowerCase()));
+          if (!matched) continue;
 
           results.push({
             platform: 'bilibili',

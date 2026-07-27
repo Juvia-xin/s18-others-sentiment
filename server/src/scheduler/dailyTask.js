@@ -58,54 +58,66 @@ async function runDailyAnalysis(dateStr) {
       const crawler = crawlers[platform];
       if (!crawler) continue;
 
-      const result = await crawler.crawl(competitor, { startDate: start, endDate: end });
-      const postList = Array.isArray(result) ? result : (result.posts || []);
-      const commentList = Array.isArray(result) ? [] : (result.comments || []);
+      try {
+        const result = await crawler.crawl(competitor, { startDate: start, endDate: end });
+        const postList = Array.isArray(result) ? result : (result.posts || []);
+        const commentList = Array.isArray(result) ? [] : (result.comments || []);
 
-      for (const postData of postList) {
-        Post.create({
-          competitor_id: competitor.id,
-          platform: postData.platform,
-          post_id: postData.post_id,
-          title: postData.title,
-          content: postData.content,
-          url: postData.url,
-          author: postData.author,
-          publish_time: postData.publish_time,
-          metrics: postData.metrics,
-          raw: postData.raw,
-        });
-      }
-
-      if (commentList.length > 0) {
-        const postRecords = Post.findAll({ competitorId: competitor.id, platform, limit: 100 });
-        const postIdMap = {};
-        postRecords.forEach(p => { postIdMap[p.post_id] = p.id; });
-
-        const batch = commentList.map(c => ({
-          post_id: postIdMap[c.post_id] || null,
-          platform: c.platform || platform,
-          comment_id: c.comment_id,
-          content: c.content,
-          author: c.author,
-          author_id: c.author_id || '',
-          publish_time: c.publish_time,
-          likes: c.likes || 0,
-          replies: c.replies || 0,
-        })).filter(c => c.post_id);
-
-        if (batch.length > 0) {
+        for (const postData of postList) {
           try {
-            Comment.createBatch(batch);
-            console.log(`  [${platform}] ${batch.length} 条评论入库`);
-          } catch (e) {
-            console.error(`  [${platform}] 评论入库失败: ${e.message}，跳过`);
+            Post.create({
+              competitor_id: competitor.id,
+              platform: postData.platform,
+              post_id: postData.post_id,
+              title: postData.title,
+              content: postData.content,
+              url: postData.url,
+              author: postData.author,
+              publish_time: postData.publish_time,
+              metrics: postData.metrics,
+              raw: postData.raw,
+            });
+          } catch (postErr) {
+            console.error(`  [${platform}] 动态入库失败: ${postErr.message}，跳过`);
           }
         }
-      }
 
-      for (const postData of postList) {
-        console.log(`  [${platform}] 已入库: ${postData.title?.slice(0, 30) || postData.post_id}`);
+        if (commentList.length > 0) {
+          const postRecords = Post.findAll({ competitorId: competitor.id, platform, limit: 2000 });
+          const postIdMap = {};
+          postRecords.forEach(p => { postIdMap[p.post_id] = p.id; });
+
+          const batch = commentList.map(c => ({
+            post_id: postIdMap[c.post_id] || null,
+            platform: c.platform || platform,
+            comment_id: c.comment_id,
+            content: c.content,
+            author: c.author,
+            author_id: c.author_id || '',
+            publish_time: c.publish_time,
+            likes: c.likes || 0,
+            replies: c.replies || 0,
+          })).filter(c => c.post_id);
+
+          if (batch.length > 0) {
+            try {
+              Comment.createBatch(batch);
+              console.log(`  [${platform}] ${batch.length} 条评论入库`);
+            } catch (e) {
+              console.error(`  [${platform}] 评论入库失败: ${e.message}，跳过`);
+            }
+          }
+        }
+
+        const logged = new Set();
+        for (const postData of postList) {
+          if (!logged.has(postData.post_id)) {
+            console.log(`  [${platform}] 已入库: ${postData.title?.slice(0, 30) || postData.post_id}`);
+            logged.add(postData.post_id);
+          }
+        }
+      } catch (platformErr) {
+        console.error(`  [${platform}] 采集失败: ${platformErr.message}，跳过`);
       }
     }
   }
@@ -114,7 +126,11 @@ async function runDailyAnalysis(dateStr) {
   if (s18 && s18.keywords.length > 0) {
       console.log(`\n[关键词搜索] S18 极限战场 (${s18.keywords.length} 个关键词)`);
       const kwCrawler = new KeywordCrawler();
-      const kwPosts = await kwCrawler.searchAll(s18.keywords, { startDate: start, endDate: end });
+      const kwPosts = await kwCrawler.searchAll(s18.keywords, {
+        startDate: start,
+        endDate: end,
+        gameNames: [s18.name, s18.name_en].filter(Boolean),
+      });
       for (const p of kwPosts) {
         try {
           Post.create({
@@ -150,15 +166,25 @@ async function runDailyAnalysis(dateStr) {
       const realComments = Comment.findAll({ postId: post.id });
       if (realComments.length > 0) {
         allComments = allComments.concat(realComments);
-      } else if (post.platform === 'steam' || post.post_id?.startsWith('kw_')) {
-        allComments.push({
-          id: post.id,
-          post_id: post.id,
-          content: post.content || post.title || '',
-          author: post.author || '',
-          likes: 0,
-          publish_time: post.publish_time,
-        });
+      } else if (post.platform === 'steam' || (post.post_id && post.post_id.startsWith('kw_'))) {
+        const existing = Comment.findAll({ postId: post.id, limit: 1 });
+        if (existing.length === 0) {
+          Comment.createBatch([{
+            post_id: post.id,
+            platform: post.platform,
+            comment_id: `${post.post_id}_auto`,
+            content: post.content || post.title || '',
+            author: post.author || '',
+            author_id: '',
+            publish_time: post.publish_time || reportDate,
+            likes: 0,
+            replies: 0,
+          }]);
+        }
+        const saved = Comment.findAll({ postId: post.id, limit: 1 });
+        if (saved.length > 0) {
+          allComments.push(saved[0]);
+        }
       }
     }
 

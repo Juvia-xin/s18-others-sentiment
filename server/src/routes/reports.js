@@ -6,6 +6,7 @@ const Comment = require('../models/comment');
 const SentimentResult = require('../models/sentiment');
 const ReportArchive = require('../models/reportArchive');
 const { getDb } = require('../db');
+const { runDailyAnalysis } = require('../scheduler/dailyTask');
 
 router.get('/', (req, res) => {
   const { date } = req.query;
@@ -39,6 +40,64 @@ router.get('/latest-date', (req, res) => {
     'SELECT report_date FROM daily_reports ORDER BY report_date DESC LIMIT 1'
   ).get();
   res.json({ date: row ? row.report_date : null });
+});
+
+router.get('/weekly', (req, res) => {
+  const db = getDb();
+  const latestRow = db.prepare('SELECT MAX(report_date) as d FROM daily_reports').get();
+  if (!latestRow?.d) return res.json({ startDate: null, endDate: null, reports: [] });
+
+  const endDate = latestRow.d;
+  const d = new Date(endDate);
+  d.setDate(d.getDate() - 6);
+  const startDate = d.toISOString().slice(0, 10);
+
+  const reports = db.prepare(`
+    SELECT c.id as competitor_id, c.name as competitor_name,
+           SUM(d.total_posts) as total_posts,
+           SUM(d.total_comments) as total_comments,
+           SUM(d.positive_count) as positive_count,
+           SUM(d.neutral_count) as neutral_count,
+           SUM(d.negative_count) as negative_count,
+           ROUND(SUM(d.positive_count)*100.0/MAX(SUM(d.total_comments),1)) as positive_pct,
+           ROUND(SUM(d.neutral_count)*100.0/MAX(SUM(d.total_comments),1)) as neutral_pct,
+           ROUND(SUM(d.negative_count)*100.0/MAX(SUM(d.total_comments),1)) as negative_pct
+    FROM daily_reports d
+    JOIN competitors c ON d.competitor_id = c.id
+    WHERE d.report_date >= ? AND d.report_date <= ?
+    GROUP BY c.id
+  `).all(startDate, endDate);
+
+  res.json({ startDate, endDate, reports });
+});
+
+router.get('/weekly-ranking', (req, res) => {
+  const db = getDb();
+  const latestRow = db.prepare('SELECT MAX(report_date) as d FROM daily_reports').get();
+  if (!latestRow?.d) return res.json({ startDate: null, endDate: null, ranking: [] });
+
+  const endDate = latestRow.d;
+  const d2 = new Date(endDate);
+  d2.setDate(d2.getDate() - 6);
+  const startDate = d2.toISOString().slice(0, 10);
+
+  const ranking = db.prepare(`
+    SELECT c.name, c.id as competitor_id,
+           SUM(d.total_posts) as total_posts,
+           SUM(d.total_comments) as total_comments,
+           SUM(d.positive_count) as positive_count,
+           SUM(d.neutral_count) as neutral_count,
+           SUM(d.negative_count) as negative_count,
+           ROUND(SUM(d.positive_count)*100.0/MAX(SUM(d.total_comments),1), 1) as positive_pct,
+           ROUND(SUM(d.negative_count)*100.0/MAX(SUM(d.total_comments),1), 1) as negative_pct
+    FROM daily_reports d
+    JOIN competitors c ON d.competitor_id = c.id
+    WHERE d.report_date >= ? AND d.report_date <= ?
+    GROUP BY c.id
+    ORDER BY negative_pct DESC
+  `).all(startDate, endDate);
+
+  res.json({ startDate, endDate, ranking });
 });
 
 router.get('/:competitorId', (req, res) => {
@@ -156,6 +215,22 @@ router.get('/:competitorId/samples', (req, res) => {
       .sort((a, b) => b.weight - a.weight)
       .slice(0, 30),
   });
+});
+
+let analysisRunning = false;
+
+router.post('/run-analysis', async (req, res) => {
+  if (analysisRunning) return res.status(409).json({ error: '分析任务已在运行中' });
+  const { date } = req.body;
+  analysisRunning = true;
+  res.json({ status: 'started', date: date || 'yesterday' });
+  try {
+    await runDailyAnalysis(date || undefined);
+  } catch (e) {
+    console.error('[run-analysis] 失败:', e.message);
+  } finally {
+    analysisRunning = false;
+  }
 });
 
 module.exports = router;

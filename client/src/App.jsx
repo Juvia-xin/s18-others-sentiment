@@ -3,7 +3,7 @@ import dayjs from 'dayjs';
 import {
   fetchCompetitors, fetchSentimentRanking, fetchDailyReports,
   fetchPosts, fetchSentimentTrend, fetchHotKeywords, seedCompetitors,
-  fetchSamples, fetchArchives, fetchLatestDate,
+  fetchSamples, fetchArchives, fetchWeeklyReports, fetchWeeklyRanking,
 } from './api';
 
 const S18_ID = 10;
@@ -14,38 +14,30 @@ function App() {
   const [reports, setReports] = useState({});
   const [ranking, setRanking] = useState([]);
   const [selCompetitorId, setSelCompetitorId] = useState(null);
-  const [date, setDate] = useState(() => dayjs().format('YYYY-MM-DD'));
+  const [weekRange, setWeekRange] = useState('');
   const [loading, setLoading] = useState(false);
   const [archives, setArchives] = useState([]);
 
   useEffect(() => {
-    async function init() {
-      try {
-        const latest = await fetchLatestDate();
-        if (latest?.date) {
-          setDate(latest.date);
-        }
-      } catch {}
-      loadData();
-    }
-    init();
+    loadWeeklyData();
   }, []);
 
-  useEffect(() => { if (date) loadData(); }, [date]);
-
-  async function loadData() {
+  async function loadWeeklyData() {
     setLoading(true);
     try {
-      const [comp, rank, reports] = await Promise.all([
+      const [comp, weeklyReports, weeklyRanking] = await Promise.all([
         fetchCompetitors(),
-        fetchSentimentRanking(date),
-        fetchDailyReports(date),
+        fetchWeeklyReports(),
+        fetchWeeklyRanking(),
       ]);
       setCompetitors(comp || []);
-      setRanking(rank?.ranking || []);
+      if (weeklyReports?.startDate) {
+        setWeekRange(`${weeklyReports.startDate} ~ ${weeklyReports.endDate}`);
+      }
       const map = {};
-      (reports?.reports || []).forEach(r => { map[r.competitor_id] = r; });
+      (weeklyReports?.reports || []).forEach(r => { map[r.competitor_id] = r; });
       setReports(map);
+      setRanking(weeklyRanking?.ranking || []);
     } catch (e) { console.error(e); }
     setLoading(false);
   }
@@ -59,10 +51,6 @@ function App() {
 
   const s18 = competitors.find(c => c.id === S18_ID);
   const s18Report = reports[S18_ID];
-
-  function changeDate(delta) {
-    setDate(prev => dayjs(prev).add(delta, 'day').format('YYYY-MM-DD'));
-  }
 
   return (
     <div className="app">
@@ -87,26 +75,24 @@ function App() {
       </nav>
 
       <div className="date-picker">
-        <button onClick={() => changeDate(-1)}>&lt; 前一天</button>
-        <span className="date-display">{date}</span>
-        <button onClick={() => changeDate(1)}>后一天 &gt;</button>
-        <button className="btn-today" onClick={() => setDate(dayjs().format('YYYY-MM-DD'))}>回到今天</button>
+        <span className="date-display">📅 {weekRange || '加载中...'}</span>
+        <button className="btn-today" onClick={loadWeeklyData}>刷新数据</button>
       </div>
 
       <main className="content">
         {loading ? <div className="loading">加载中...</div> : (
           <>
-            {tab === 's18' && <SentimentPanel report={s18Report} competitor={s18} date={date} isS18 />}
+            {tab === 's18' && <SentimentPanel report={s18Report} competitor={s18} dateRange={weekRange} isS18 />}
             {tab === 'competitor' && (
               <CompetitorPanel
                 competitors={competitors.filter(c => c.id !== S18_ID)}
                 reports={reports}
-                date={date}
+                dateRange={weekRange}
                 selId={selCompetitorId}
                 setSelId={setSelCompetitorId}
               />
             )}
-            {tab === 'ranking' && <RankingPanel ranking={ranking} s18Name={s18?.name} date={date} />}
+            {tab === 'ranking' && <RankingPanel ranking={ranking} s18Name={s18?.name} dateRange={weekRange} />}
             {tab === 'archives' && <HistoryReportsPanel archives={archives} />}
           </>
         )}
@@ -118,7 +104,9 @@ function App() {
 function MetricRow({ report, competitor }) {
   const r = report || {};
   const total = r.total_comments || 0;
-  const ratio = r.sentiment_ratio ? JSON.parse(r.sentiment_ratio) : {};
+  const posPct = r.positive_pct !== undefined ? r.positive_pct : (r.sentiment_ratio ? JSON.parse(r.sentiment_ratio).positive : 0);
+  const neuPct = r.neutral_pct !== undefined ? r.neutral_pct : (r.sentiment_ratio ? JSON.parse(r.sentiment_ratio).neutral : 0);
+  const negPct = r.negative_pct !== undefined ? r.negative_pct : (r.sentiment_ratio ? JSON.parse(r.sentiment_ratio).negative : 0);
   return (
     <div className="metric-row">
       <div className="metric-card">
@@ -130,15 +118,15 @@ function MetricRow({ report, competitor }) {
         <div className="mc-label">评论总数</div>
       </div>
       <div className="metric-card positive">
-        <div className="mc-num">{ratio.positive || 0}%</div>
+        <div className="mc-num">{posPct}%</div>
         <div className="mc-label">正面率</div>
       </div>
       <div className="metric-card neutral">
-        <div className="mc-num">{ratio.neutral || 0}%</div>
+        <div className="mc-num">{neuPct}%</div>
         <div className="mc-label">中性率</div>
       </div>
       <div className="metric-card negative">
-        <div className="mc-num">{ratio.negative || 0}%</div>
+        <div className="mc-num">{negPct}%</div>
         <div className="mc-label">负面率</div>
       </div>
     </div>
@@ -147,8 +135,8 @@ function MetricRow({ report, competitor }) {
 
 function AlertBanner({ report }) {
   if (!report) return null;
-  const r = JSON.parse(report.sentiment_ratio || '{}');
-  const negPct = r.negative || 0;
+  const negPct = report.negative_pct !== undefined ? report.negative_pct
+    : (report.sentiment_ratio ? JSON.parse(report.sentiment_ratio).negative : 0);
   const level = negPct > 50 ? 'high' : negPct > 30 ? 'medium' : null;
   if (!level) return null;
 
@@ -161,7 +149,7 @@ function AlertBanner({ report }) {
   );
 }
 
-function SentimentPanel({ report, competitor, date, isS18 }) {
+function SentimentPanel({ report, competitor, dateRange, isS18 }) {
   const [trendData, setTrendData] = useState([]);
   const [samples, setSamples] = useState(null);
 
@@ -176,23 +164,24 @@ function SentimentPanel({ report, competitor, date, isS18 }) {
         setTrendData(Object.values(grouped).sort((a, b) => a.date.localeCompare(b.date)));
       });
 
-      fetchSamples(competitor.id, date).then(data => {
+      const latestDate = dateRange?.split(' ~ ')?.[1] || dayjs().format('YYYY-MM-DD');
+      fetchSamples(competitor.id, latestDate).then(data => {
         setSamples(data);
       }).catch(() => setSamples(null));
     }
-  }, [competitor?.id, date]);
+  }, [competitor?.id, dateRange]);
 
   return (
     <div>
       <div className="card">
-        <h3>{isS18 ? 'S18 极限战场' : competitor?.name} · 关键指标</h3>
+        <h3>{isS18 ? 'S18 极限战场' : competitor?.name} · 关键指标 ({dateRange || ''})</h3>
         <MetricRow report={report} competitor={competitor} />
       </div>
 
       <AlertBanner report={report} />
 
       <div className="card">
-        <h3>近7日舆情趋势</h3>
+        <h3>近7日舆情趋势 ({dateRange || ''})</h3>
         {trendData.length === 0 ? (
           <div className="empty-state"><p>暂无趋势数据</p></div>
         ) : (
@@ -202,7 +191,7 @@ function SentimentPanel({ report, competitor, date, isS18 }) {
 
       {samples && (samples.wordcloud?.length > 0 || samples.positive?.length > 0 || samples.negative?.length > 0) && (
         <div className="card">
-          <h3>本日舆情样本</h3>
+          <h3>本周舆情样本</h3>
           <WordCloud words={samples.wordcloud || []} />
           <SampleExcerpts positive={samples.positive || []} negative={samples.negative || []} />
         </div>
@@ -210,7 +199,7 @@ function SentimentPanel({ report, competitor, date, isS18 }) {
 
       {report && (
         <div className="card">
-          <h3>本日舆情摘要</h3>
+          <h3>本周舆情摘要</h3>
           <p className="summary-text">{report.summary_text}</p>
           <UserProfile report={report} />
         </div>
@@ -259,21 +248,22 @@ function UserProfile({ report }) {
   );
 }
 
-function CompetitorPanel({ competitors, reports, date, selId, setSelId }) {
+function CompetitorPanel({ competitors, reports, dateRange, selId, setSelId }) {
   if (!selId && competitors.length > 0) {
     return (
       <div className="competitor-grid">
         {competitors.map(c => {
           const r = reports[c.id];
-          const ratio = r ? JSON.parse(r.sentiment_ratio || '{}') : {};
+          const posPct = r?.positive_pct ?? (r?.sentiment_ratio ? JSON.parse(r.sentiment_ratio).positive : 0);
+          const negPct = r?.negative_pct ?? (r?.sentiment_ratio ? JSON.parse(r.sentiment_ratio).negative : 0);
           return (
             <div key={c.id} className="competitor-card" onClick={() => setSelId(c.id)}>
               <h4>{c.name}</h4>
               <div className="category">{c.category}</div>
               {r ? (
                 <div style={{ marginTop: 8 }}>
-                  <span className="badge positive">正面{ratio.positive || 0}%</span>{' '}
-                  <span className="badge negative">负面{ratio.negative || 0}%</span>
+                  <span className="badge positive">正面{posPct}%</span>{' '}
+                  <span className="badge negative">负面{negPct}%</span>
                   <div style={{ fontSize: 11, color: 'var(--text2)', marginTop: 4 }}>
                     动态{r.total_posts} · 评论{r.total_comments}
                   </div>
@@ -294,16 +284,16 @@ function CompetitorPanel({ competitors, reports, date, selId, setSelId }) {
   return (
     <div>
       <button className="seed-btn" onClick={() => setSelId(null)}>← 返回竞品列表</button>
-      <SentimentPanel report={r} competitor={c} date={date} />
+      <SentimentPanel report={r} competitor={c} dateRange={dateRange} />
     </div>
   );
 }
 
-function RankingPanel({ ranking, s18Name, date }) {
+function RankingPanel({ ranking, s18Name, dateRange }) {
   const sorted = [...ranking].sort((a, b) => b.positive_pct - a.positive_pct);
   return (
     <div className="card">
-      <h3>舆情排名 · {date}（按正面率降序）</h3>
+      <h3>舆情排名 · {dateRange || ''}（按正面率降序）</h3>
       {sorted.length === 0 ? (
         <div className="empty-state"><p>暂无数据</p></div>
       ) : (

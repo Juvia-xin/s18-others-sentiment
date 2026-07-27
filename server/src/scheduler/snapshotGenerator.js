@@ -131,14 +131,19 @@ function generateS18Detail(db, s18Id, startDate, endDate) {
 
 function generateCompetitorSummaries(db, s18Id, startDate, endDate) {
   const competitors = db.prepare(`
-    SELECT c.id, c.name, d.total_posts, d.total_comments, d.positive_count, d.neutral_count, d.negative_count,
-           d.summary_text
+    SELECT c.id, c.name,
+           SUM(d.total_posts) as total_posts,
+           SUM(d.total_comments) as total_comments,
+           SUM(d.positive_count) as positive_count,
+           SUM(d.neutral_count) as neutral_count,
+           SUM(d.negative_count) as negative_count
     FROM daily_reports d
     JOIN competitors c ON d.competitor_id = c.id
     WHERE d.report_date >= ? AND d.report_date <= ?
       AND c.id != ?
-      AND d.total_comments > 0
-    ORDER BY d.total_comments DESC
+    GROUP BY c.id
+    HAVING SUM(d.total_comments) > 0
+    ORDER BY SUM(d.total_comments) DESC
   `).all(startDate, endDate, s18Id || -1);
 
   if (competitors.length === 0) return '';
@@ -179,7 +184,8 @@ function generateCompetitorSummaries(db, s18Id, startDate, endDate) {
     if (topKw.length > 0) {
       html += `<span class="comp-kw">${topKw.map(([kw, cnt]) => `<span class="kw-tag">${escapeHtml(kw)}(${cnt})</span>`).join(' ')}</span>`;
     }
-    html += `<span class="comp-summary">${escapeHtml(c.summary_text || '')}</span>`;
+    const cSummary = negPct > 40 ? '负面声量较高，需重点关注。' : negPct > 20 ? '存在部分负面反馈。' : posPct > 60 ? '整体口碑积极。' : '舆论表现平稳。';
+    html += `<span class="comp-summary">${cSummary}</span>`;
     html += `</div>`;
   }
 
